@@ -26,6 +26,7 @@ AC_DEFUN([LIBVIRT_CHECK_PTHREAD], [
   LIBS="$LIBS $LIB_PTHREAD $LIBMULTITHREAD"
   pthread_found=yes
   AC_CHECK_FUNCS([pthread_mutexattr_init])
+  AC_CHECK_FUNCS([pthread_threadid_np])
   AC_CHECK_HEADER([pthread.h],,[pthread_found=no])
 
   if test "$ac_cv_func_pthread_mutexattr_init:$pthread_found" != "yes:yes"
