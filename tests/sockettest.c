@@ -85,6 +85,59 @@ static int testFormatHelper(const void *opaque)
     return testFormat(data->addr, data->addrstr, data->pass);
 }
 
+static char *inet6AddressText(const void *inet6address)
+{
+    const uint16_t *data = inet6address;
+    char *text;
+    ignore_value(virAsprintfQuiet(&text, "%04x:%04x:%04x:%04x:%04x:%04x:%04x:%04x",
+                                  ntohs(data[0]), ntohs(data[1]), ntohs(data[2]), ntohs(data[3]),
+                                  ntohs(data[4]), ntohs(data[5]), ntohs(data[6]), ntohs(data[7])));
+    return text;
+}
+
+static int testFormatInet6(virSocketAddr *addr, const uint32_t inet6addr[4], bool pass)
+{
+    char *formatstr;
+
+    formatstr = virSocketAddrFormat(addr);
+    if (!formatstr)
+        return pass ? -1 : 0;
+
+    int rc;
+    virSocketAddr formataddr;
+
+    rc = virSocketAddrParse(&formataddr, formatstr, AF_INET6);
+
+    if (rc < 0) {
+        VIR_FREE(formatstr);
+        return pass ? -1 : 0;
+    }
+
+    if (memcmp(inet6addr, &formataddr.data.inet6.sin6_addr.s6_addr[0],
+               sizeof(formataddr.data.inet6.sin6_addr.s6_addr)) != 0) {
+        char *formatinet6addr = inet6AddressText(formataddr.data.inet6.sin6_addr.s6_addr);
+        char *expectedinet6addr = inet6AddressText(inet6addr);
+        virTestDifference(stderr, expectedinet6addr, formatinet6addr);
+        VIR_FREE(formatinet6addr);
+        VIR_FREE(expectedinet6addr);
+        VIR_FREE(formatstr);
+        return pass ? -1 : 0;
+    } else {
+        VIR_FREE(formatstr);
+        return pass ? 0 : -1;
+    }
+}
+
+struct testFormatInet6Data {
+    virSocketAddr *addr;
+    uint32_t inet6addr[4];
+    bool pass;
+};
+static int testFormatInet6Helper(const void *opaque)
+{
+    const struct testFormatInet6Data *data = opaque;
+    return testFormatInet6(data->addr, data->inet6addr, data->pass);
+}
 
 static int
 testRange(const char *saddrstr, const char *eaddrstr,
@@ -288,6 +341,21 @@ mymain(void)
             ret = -1; \
     } while (0)
 
+#define DO_TEST_PARSE_AND_FORMAT_INET6(addrstr, addr0, addr1, addr2, addr3, family, pass) \
+    do { \
+        virSocketAddr addr; \
+        struct testParseData data = { &addr, addrstr, family, pass }; \
+        memset(&addr, 0, sizeof(addr)); \
+        if (virTestRun("Test parse " addrstr " family " #family, \
+                       testParseHelper, &data) < 0) \
+            ret = -1; \
+        struct testFormatInet6Data data2 = { &addr, {htonl(addr0), htonl(addr1), \
+                                                     htonl(addr2), htonl(addr3)}, pass }; \
+        if (virTestRun("Test format " addrstr " family " #family, \
+                       testFormatInet6Helper, &data2) < 0) \
+            ret = -1; \
+    } while (0)
+
 #define DO_TEST_PARSE_AND_CHECK_FORMAT(addrstr, addrformated, family, pass) \
     do { \
         virSocketAddr addr; \
@@ -377,11 +445,15 @@ mymain(void)
     DO_TEST_PARSE_AND_CHECK_FORMAT("1.2.3", "1.2.0.3", AF_INET, true);
     DO_TEST_PARSE_AND_CHECK_FORMAT("1.2.3", "1.2.3.0", AF_INET, false);
 
-    DO_TEST_PARSE_AND_FORMAT("::1", AF_UNSPEC, true);
+    DO_TEST_PARSE_AND_FORMAT_INET6("::1", 0, 0, 0, 1, AF_UNSPEC, true);
     DO_TEST_PARSE_AND_FORMAT("::1", AF_INET, false);
-    DO_TEST_PARSE_AND_FORMAT("::1", AF_INET6, true);
+    DO_TEST_PARSE_AND_FORMAT_INET6("::1", 0, 0, 0, 1, AF_INET6, true);
     DO_TEST_PARSE_AND_FORMAT("::1", AF_UNIX, false);
-    DO_TEST_PARSE_AND_FORMAT("::ffff", AF_UNSPEC, true);
+    DO_TEST_PARSE_AND_FORMAT_INET6("::ffff", 0, 0, 0, 0xffff, AF_UNSPEC, true);
+    DO_TEST_PARSE_AND_FORMAT_INET6("::0.0.255.255", 0, 0, 0, 0xffff, AF_UNSPEC, true);
+    DO_TEST_PARSE_AND_FORMAT("::192.168.122.17", AF_INET, false);
+    DO_TEST_PARSE_AND_FORMAT_INET6("::192.168.122.17", 0, 0, 0, 0xc0a87a11, AF_UNSPEC, true);
+    DO_TEST_PARSE_AND_FORMAT_INET6("::ffff:192.168.122.17", 0, 0, 0xffff, 0xc0a87a11, AF_UNSPEC, true);
 
     /* tests that specify a network that should contain the range */
     DO_TEST_RANGE("192.168.122.1", "192.168.122.1", "192.168.122.1", 24, 1, true);
@@ -464,6 +536,7 @@ mymain(void)
     DO_TEST_NUMERIC_FAMILY("::", AF_INET6);
     DO_TEST_NUMERIC_FAMILY("1", AF_INET);
     DO_TEST_NUMERIC_FAMILY("::ffff", AF_INET6);
+    DO_TEST_NUMERIC_FAMILY("::192.168.1.1", AF_INET6);
     DO_TEST_NUMERIC_FAMILY("examplehost", -1);
 
     DO_TEST_LOCALHOST("127.0.0.1", true);
@@ -478,6 +551,8 @@ mymain(void)
     DO_TEST_LOCALHOST("0.0.0.1", false);
     DO_TEST_LOCALHOST("hello", false);
     DO_TEST_LOCALHOST("fe80::1:1", false);
+    DO_TEST_LOCALHOST("::127.0.0.1", false);
+    DO_TEST_LOCALHOST("::0.0.0.1", true);
 
     return ret == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }
